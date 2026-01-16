@@ -1,0 +1,10 @@
+version: "3.9"
+
+services:
+  arc-notify:
+    build: .
+    container_name: arc-notify
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./src/config:/app/src/config

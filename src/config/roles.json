@@ -1,0 +1,62 @@
+{
+  "Husk Graveyard": {
+    "roleId": "1461705216045875271",
+    "emoji": "💀",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/husk-graveyard.webp"
+  },
+  "Hidden Bunker": {
+    "roleId": "1461705217665007738",
+    "emoji": "🛡️",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/hiddenbunker.webp"
+  },
+  "Cold Snap": {
+    "roleId": "1461705220009623708",
+    "emoji": "❄️",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/coldsnap.webp"
+  },
+  "Night Raid": {
+    "roleId": "1461705222102581322",
+    "emoji": "🌙",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/night.webp"
+  },
+  "Uncovered Caches": {
+    "roleId": "1461705224740933664",
+    "emoji": "💰",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/cache.webp"
+  },
+  "Electromagnetic Storm": {
+    "roleId": "1461705227605381182",
+    "emoji": "⚡",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/electrical.webp"
+  },
+  "Matriarch": {
+    "roleId": "1461705230830796863",
+    "emoji": "👑",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/matriarch.webp"
+  },
+  "Locked Gate": {
+    "roleId": "1461706828177080341",
+    "emoji": "🔒",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/lockedgate.webp"
+  },
+  "Harvester": {
+    "roleId": "1461705235457114196",
+    "emoji": "🌾",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/harvester.webp"
+  },
+  "Launch Tower Loot": {
+    "roleId": "1461705237504069634",
+    "emoji": "🚀",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/hiddenbunker.webp"
+  },
+  "Prospecting Probes": {
+    "roleId": "1461705257494253592",
+    "emoji": "🛰️",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/probe.webp"
+  },
+  "Lush Blooms": {
+    "roleId": "1461705260174151866",
+    "emoji": "🌸",
+    "icon": "https://cdn.metaforge.app/arc-raiders/custom/lush.webp"
+  }
+}
