@@ -1,8 +1,16 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, Partials, TextChannel } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  TextChannel,
+} from 'discord.js';
 import { MetaforgeService } from './services/MetaforgeService.js';
 import { EventMessage } from './domains/EventMessage.js';
-import { MessageService } from './services/MessageService.js';
+import {
+  MessageService,
+  MapMessageState,
+} from './services/MessageService.js';
 import { EventRoleService } from './services/EventRoleService.js';
 import { CommandService } from './services/CommandService.js';
 import { RoleReactionService } from './services/RoleReactionService.js';
@@ -19,112 +27,169 @@ const client = new Client({
 
 const metaforge = new MetaforgeService();
 const announced = new Set<string>();
-const liveMessages: Map<string, string> = new Map();
+const liveMessages: Map<string, MapMessageState> = new Map();
 
 client.once('clientReady', async () => {
-  console.log(`✅ Logged in as ${client.user?.tag}`);
+  console.log(`[Startup] Logged in as ${client.user?.tag}`);
 
-  const announceChannel = (await client.channels.fetch(process.env.CHANNEL_ID!)) as TextChannel;
+  const announceChannel = (await client.channels.fetch(
+    process.env.CHANNEL_ID!
+  )) as TextChannel;
 
-  // Clear old messages from the bot (except role reaction message)
-  const fetchedMessages = await announceChannel.messages.fetch({ limit: 100 });
-  for (const msg of fetchedMessages.values()) {
-    if (msg.author.id === client.user?.id) await msg.delete().catch(() => {});
+  /* -------------------------------------------------- */
+  /* STARTUP CLEANUP                                   */
+  /* -------------------------------------------------- */
+
+  const fetched = await announceChannel.messages.fetch({ limit: 100 });
+  for (const msg of fetched.values()) {
+    if (msg.author.id === client.user?.id) {
+      await msg.delete().catch(() => {});
+    }
   }
-  console.log('[Startup] Cleared old messages in announce channel');
+  console.log('[Startup] Cleared old bot messages');
 
-  // Reaction roles
+  /* -------------------------------------------------- */
+  /* ROLE + SERVICES                                   */
+  /* -------------------------------------------------- */
+
   let roleReactionService: RoleReactionService | undefined;
   if (process.env.ROLE_CHANNEL_ID) {
-    const roleChannel = (await client.channels.fetch(process.env.ROLE_CHANNEL_ID!)) as TextChannel;
-    roleReactionService = new RoleReactionService(roleChannel.guild, roleChannel);
+    const roleChannel = (await client.channels.fetch(
+      process.env.ROLE_CHANNEL_ID!
+    )) as TextChannel;
+
+    roleReactionService = new RoleReactionService(
+      roleChannel.guild,
+      roleChannel
+    );
     await roleReactionService.postReactionRoleMessage();
-    console.log('[Startup] Posted/used reaction role message');
+    console.log('[Startup] Reaction role message ready');
   }
 
-  const roleService = new EventRoleService(announceChannel.guild, roleReactionService);
+  const roleService = new EventRoleService(
+    announceChannel.guild,
+    roleReactionService
+  );
   await roleService.ensureRolesExist();
+  console.log('[Startup] Event roles ensured');
 
   const messageService = new MessageService(announceChannel);
 
-  const commandService = new CommandService(client, async () => {
-    const events = await metaforge.fetchEvents();
-    return events.map((e) => new EventMessage(e));
-  });
+  const commandService = new CommandService(client);
   await commandService.register();
-  console.log('[Startup] Registered commands');
+  console.log('[Startup] Slash commands registered');
 
-  // Initial live messages per map
-  const events = (await metaforge.fetchEvents()).map((e) => new EventMessage(e));
-  const now = Date.now();
-  const eventsPerMap: Map<string, EventMessage[]> = new Map();
+  /* -------------------------------------------------- */
+  /* INITIAL GLOBAL NOTIFY SEND                         */
+  /* -------------------------------------------------- */
 
-  for (const event of events) {
-    if (event.endTime.getTime() <= now) continue;
-    const mapEvents = eventsPerMap.get(event.map) || [];
-    mapEvents.push(event);
-    eventsPerMap.set(event.map, mapEvents);
-  }
+  await runGlobalNotify(
+    messageService,
+    roleService,
+    announceChannel,
+    true
+  );
 
-  for (const [map, mapEvents] of eventsPerMap) {
-    const nextEvent = mapEvents.find((e) => e.startTime.getTime() > now) || mapEvents[0];
-    const roleId = await roleService.resolve(nextEvent.name, nextEvent.icon);
-    const role = await announceChannel.guild.roles.fetch(roleId);
-    if (role) {
-      const message = await messageService.sendMapEvents([nextEvent], role, liveMessages.get(map));
-      liveMessages.set(map, message.id);
-      console.log(`[Startup] Sent live message for map "${map}" with event "${nextEvent.name}"`);
-    }
-  }
+  /* -------------------------------------------------- */
+  /* POLL LOOP                                         */
+  /* -------------------------------------------------- */
 
-  // Polling loop
   const interval = Number(process.env.FETCH_INTERVAL ?? 60) * 1000;
+
   setInterval(async () => {
-    try {
-      const events = (await metaforge.fetchEvents()).map((e) => new EventMessage(e));
-      const now = Date.now();
-
-      const eventsPerMap: Map<string, EventMessage[]> = new Map();
-      for (const event of events) {
-        if (event.endTime.getTime() <= now) continue;
-        const mapEvents = eventsPerMap.get(event.map) || [];
-        mapEvents.push(event);
-        eventsPerMap.set(event.map, mapEvents);
-      }
-
-      for (const [map, mapEvents] of eventsPerMap) {
-        const nextEvent = mapEvents.find((e) => e.startTime.getTime() > now) || mapEvents[0];
-        const roleId = await roleService.resolve(nextEvent.name, nextEvent.icon);
-        const role = await announceChannel.guild.roles.fetch(roleId);
-        if (!role) continue;
-
-        const messageId = liveMessages.get(map);
-        const message = await messageService.sendMapEvents([nextEvent], role, messageId);
-        liveMessages.set(map, message.id);
-        console.log(`[Poll] Updated live message for map "${map}" with event "${nextEvent.name}"`);
-
-        // Pre-event ping 5 mins before
-        if (
-          nextEvent.startTime.getTime() - now <= 5 * 60 * 1000 &&
-          nextEvent.startTime.getTime() - now > 4.5 * 60 * 1000 &&
-          !announced.has(nextEvent.key)
-        ) {
-          announced.add(nextEvent.key);
-          await messageService.send(nextEvent, role);
-          console.log(`[Ping] Pre-event ping for "${nextEvent.name}"`);
-        }
-      }
-    } catch (err) {
-      console.error('❌ Error in poll loop:', err);
-    }
+    await runGlobalNotify(
+      messageService,
+      roleService,
+      announceChannel,
+      false
+    );
   }, interval);
 });
 
-(async () => {
+/* ================================================== */
+/* GLOBAL NOTIFY LOGIC                                */
+/* ================================================== */
+
+async function runGlobalNotify(
+  messageService: MessageService,
+  roleService: EventRoleService,
+  announceChannel: TextChannel,
+  isStartup: boolean
+) {
   try {
-    await client.login(process.env.DISCORD_TOKEN);
+    const events = (await metaforge.fetchEvents()).map(
+      (e) => new EventMessage(e)
+    );
+
+    const now = Date.now();
+    const eventsPerMap = new Map<string, EventMessage[]>();
+
+    for (const e of events) {
+      if (e.endTime.getTime() <= now) continue;
+      const list = eventsPerMap.get(e.map) ?? [];
+      list.push(e);
+      eventsPerMap.set(e.map, list);
+    }
+
+    for (const [map, list] of eventsPerMap) {
+      list.sort(
+        (a, b) =>
+          a.startTime.getTime() - b.startTime.getTime()
+      );
+
+      const current =
+        list.find(
+          (e) =>
+            e.startTime.getTime() <= now &&
+            e.endTime.getTime() > now
+        ) ?? null;
+
+      const next =
+        list.find((e) => e.startTime.getTime() > now) ??
+        list[0];
+
+      const roleId = await roleService.resolve(
+        next.name,
+        next.icon
+      );
+
+      // ✅ FIX: use announceChannel.guild (public)
+      const role = await announceChannel.guild.roles.fetch(roleId);
+      if (!role) continue;
+
+      const newState = await messageService.sendOrReplace(
+        liveMessages.get(map),
+        current,
+        next,
+        role
+      );
+
+      liveMessages.set(map, newState);
+
+      console.log(
+        `[${isStartup ? 'Startup' : 'Poll'}] ${map} → Current: ${
+          current?.name ?? 'None'
+        }, Next: ${next.name}`
+      );
+
+      const diff = next.startTime.getTime() - now;
+      if (
+        diff <= 5 * 60 * 1000 &&
+        diff > 4.5 * 60 * 1000 &&
+        !announced.has(next.key)
+      ) {
+        announced.add(next.key);
+        await messageService.sendPing(next, role);
+        console.log(
+          `[Ping] 5-minute warning for ${next.name} on ${map}`
+        );
+      }
+    }
   } catch (err) {
-    console.error('❌ Failed to login:', err);
-    process.exit(1);
+    console.error('❌ Global notify error:', err);
   }
+}
+
+(async () => {
+  await client.login(process.env.DISCORD_TOKEN);
 })();
