@@ -1,5 +1,5 @@
 import { TextChannel, Role, EmbedBuilder, Message } from 'discord.js';
-import { EventMessage } from '../domains/EventMessage.js';
+import { EventMessage } from '../domains/EventMessage';
 
 export interface MapMessageState {
   messageId: string;

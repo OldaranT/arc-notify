@@ -14,9 +14,9 @@ import {
 } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
-import { SetupEvents } from './SetupEvents.js';
-import { MetaforgeService } from './MetaforgeService.js';
-import { EventMessage } from '../domains/EventMessage.js';
+import { SetupEvents } from './SetupEvents';
+import { MetaforgeService } from './MetaforgeService';
+import { EventMessage } from '../domains/EventMessage';
 
 const CONFIG_PATH = path.resolve(
   process.cwd(),

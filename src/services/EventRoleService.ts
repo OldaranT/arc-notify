@@ -1,7 +1,7 @@
 import { Guild, Role } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
-import { RoleReactionService } from './RoleReactionService.js';
+import { RoleReactionService } from './RoleReactionService';
 
 interface RoleConfig {
   [eventName: string]: { roleId: string; emoji: string; icon?: string };

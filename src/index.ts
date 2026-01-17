@@ -5,15 +5,15 @@ import {
   Partials,
   TextChannel,
 } from 'discord.js';
-import { MetaforgeService } from './services/MetaforgeService.js';
-import { EventMessage } from './domains/EventMessage.js';
+import { MetaforgeService } from './services/MetaforgeService';
+import { EventMessage } from './domains/EventMessage';
 import {
   MessageService,
   MapMessageState,
-} from './services/MessageService.js';
-import { EventRoleService } from './services/EventRoleService.js';
-import { CommandService } from './services/CommandService.js';
-import { RoleReactionService } from './services/RoleReactionService.js';
+} from './services/MessageService';
+import { EventRoleService } from './services/EventRoleService';
+import { CommandService } from './services/CommandService';
+import { RoleReactionService } from './services/RoleReactionService';
 
 const client = new Client({
   intents: [
