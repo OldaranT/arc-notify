@@ -1,6 +1,7 @@
 import { Guild, TextChannel, Message, User, PartialUser } from 'discord.js';
 import fs from 'fs';
 import path from 'path';
+import { configService } from './ConfigService';
 
 interface EventRole {
   name: string;
@@ -22,14 +23,21 @@ export class RoleReactionService {
     this.filePath = path.resolve('src/config/roles.json');
 
     const json: Record<string, { roleId: string; emoji: string; icon?: string }> =
-      fs.existsSync(this.filePath) ? JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) : {};
+      fs.existsSync(this.filePath)
+        ? JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
+        : {};
 
     this.roles = new Map();
     Object.entries(json).forEach(([name, data]) => {
-      this.roles.set(name, { name, roleId: data.roleId, emoji: data.emoji, icon: data.icon });
+      this.roles.set(name, {
+        name,
+        roleId: data.roleId,
+        emoji: data.emoji,
+        icon: data.icon,
+      });
     });
 
-    console.log('[RoleReactionService] Loaded roles:', Array.from(this.roles.keys()));
+    console.log('[RoleReactionService] Loaded roles:', [...this.roles.keys()]);
 
     this.registerReactionListeners();
   }
@@ -39,13 +47,12 @@ export class RoleReactionService {
       try {
         if (!this.message) return;
         if (reaction.partial) reaction = await reaction.fetch();
-        if (!reaction.message || reaction.message.id !== this.message.id) return;
+        if (reaction.message.id !== this.message.id) return;
         if (user.bot) return;
 
-        console.log(`[RoleReactionService] Syncing roles for ${user.tag}`);
         await this.syncMemberRoles(user as User);
       } catch (err) {
-        console.error('❌ Error handling reaction:', err);
+        console.error('❌ Reaction handler error:', err);
       }
     };
 
@@ -56,95 +63,75 @@ export class RoleReactionService {
   private async syncMemberRoles(user: User) {
     if (!this.message) return;
 
-    try {
-      const member = await this.guild.members.fetch(user.id);
-      const userReactions = this.message.reactions.cache
-        .filter((r) => r.users.cache.has(user.id))
-        .map((r) => r.emoji.name);
+    const member = await this.guild.members.fetch(user.id);
+    const userReactions = this.message.reactions.cache
+      .filter(r => r.users.cache.has(user.id))
+      .map(r => r.emoji.name);
 
-      for (const role of this.roles.values()) {
-        const hasRole = member.roles.cache.has(role.roleId);
-        const shouldHave = userReactions.includes(role.emoji);
+    for (const role of this.roles.values()) {
+      const hasRole = member.roles.cache.has(role.roleId);
+      const shouldHave = userReactions.includes(role.emoji);
 
-        if (shouldHave && !hasRole) {
-          await member.roles.add(role.roleId).catch(console.error);
-          console.log(`✅ Added role ${role.name} to ${member.user.tag}`);
-        } else if (!shouldHave && hasRole) {
-          await member.roles.remove(role.roleId).catch(console.error);
-          console.log(`❌ Removed role ${role.name} from ${member.user.tag}`);
-        }
+      if (shouldHave && !hasRole) {
+        await member.roles.add(role.roleId).catch(console.error);
+      } else if (!shouldHave && hasRole) {
+        await member.roles.remove(role.roleId).catch(console.error);
       }
-    } catch (err) {
-      console.error('❌ Failed to sync member roles:', err);
     }
   }
 
-  public async postReactionRoleMessage(existingMessageId?: string) {
-    console.log('[RoleReactionService] Posting reaction role message...');
+  /* ================= REACTION ROLE MESSAGE ================= */
 
+  public async postReactionRoleMessage(existingMessageId?: string) {
     const embed = {
       title: 'Self-Assign Event Roles',
       description: 'React to get/remove roles for events!',
       color: 0x3498db,
-      fields: Array.from(this.roles.values()).map((role) => ({
+      fields: Array.from(this.roles.values()).map(role => ({
         name: `${role.emoji} ${role.name}`,
         value: '\u200b',
         inline: true,
       })),
     };
 
-    const fetchedMessages = await this.channel.messages.fetch({ limit: 50 });
-    console.log(`[RoleReactionService] Fetched ${fetchedMessages.size} messages from channel`);
-
-    // Try reuse by existingMessageId
+    // Try reuse saved message
     if (existingMessageId) {
-      const existing = fetchedMessages.get(existingMessageId);
-      if (existing) this.message = existing;
-    }
-
-    // Else try first previous bot embed
-    if (!this.message) {
-      const previous = fetchedMessages.find(
-        (m) => m.author.id === this.guild.client.user?.id && m.embeds.length > 0
-      );
-      if (previous) this.message = previous;
-    }
-
-    // Delete other bot messages
-    for (const msg of fetchedMessages.values()) {
-      if (msg.author.id === this.guild.client.user?.id && msg.id !== this.message?.id) {
-        await msg.delete().catch(() => {});
-        console.log(`[RoleReactionService] Deleted old bot message ${msg.id}`);
+      try {
+        this.message = await this.channel.messages.fetch(existingMessageId);
+      } catch {
+        this.message = undefined;
       }
     }
 
-    // Send or edit embed
-    if (this.message) {
-      await this.message.edit({ embeds: [embed] });
-      console.log(`[RoleReactionService] Edited existing embed message ${this.message.id}`);
-    } else {
+    // Create or update
+    if (!this.message) {
       this.message = await this.channel.send({ embeds: [embed] });
-      console.log(`[RoleReactionService] Sent new embed message ${this.message.id}`);
+      console.log('[RoleReactionService] Created role message', this.message.id);
+    } else {
+      await this.message.edit({ embeds: [embed] });
+      console.log('[RoleReactionService] Reused role message', this.message.id);
     }
 
-    // Add missing reactions
-    const currentReactions = this.message.reactions.cache.map((r) => r.emoji.name);
+    // 🔴 Persist message ID
+    configService.update({ roleMessageId: this.message.id });
+
+    // Ensure reactions exist
+    const current = this.message.reactions.cache.map(r => r.emoji.name);
     for (const role of this.roles.values()) {
-      if (!currentReactions.includes(role.emoji)) {
+      if (!current.includes(role.emoji)) {
         await this.message.react(role.emoji).catch(console.error);
-        console.log(`[RoleReactionService] Reacted with ${role.emoji}`);
       }
     }
   }
 
   public async addRole(name: string, roleId: string, emoji: string, icon?: string) {
     this.roles.set(name, { name, roleId, emoji, icon });
-    fs.writeFileSync(this.filePath, JSON.stringify(Object.fromEntries(this.roles), null, 2), 'utf-8');
-    console.log(`[RoleReactionService] Added role ${name}`);
-    await this.postReactionRoleMessage(this.message?.id);
-  }
+    fs.writeFileSync(
+      this.filePath,
+      JSON.stringify(Object.fromEntries(this.roles), null, 2),
+      'utf-8'
+    );
 
-  public getAllRoles() {
-    return Array.from(this.roles.values());
+    await this.postReactionRoleMessage(this.message?.id);
   }
 }

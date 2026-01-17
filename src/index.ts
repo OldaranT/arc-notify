@@ -5,15 +5,14 @@ import {
   Partials,
   TextChannel,
 } from 'discord.js';
+
 import { MetaforgeService } from './services/MetaforgeService';
 import { EventMessage } from './domains/EventMessage';
-import {
-  MessageService,
-  MapMessageState,
-} from './services/MessageService';
+import { MessageService, MapMessageState } from './services/MessageService';
 import { EventRoleService } from './services/EventRoleService';
 import { CommandService } from './services/CommandService';
 import { RoleReactionService } from './services/RoleReactionService';
+import { configService } from './services/ConfigService';
 
 const client = new Client({
   intents: [
@@ -29,86 +28,93 @@ const metaforge = new MetaforgeService();
 const announced = new Set<string>();
 const liveMessages: Map<string, MapMessageState> = new Map();
 
+let pollHandle: NodeJS.Timeout | null = null;
+let initialized = false;
+
+/* ================= CLIENT READY ================= */
+
 client.once('clientReady', async () => {
   console.log(`[Startup] Logged in as ${client.user?.tag}`);
-
-  const announceChannel = (await client.channels.fetch(
-    process.env.CHANNEL_ID!
-  )) as TextChannel;
-
-  /* -------------------------------------------------- */
-  /* STARTUP CLEANUP                                   */
-  /* -------------------------------------------------- */
-
-  const fetched = await announceChannel.messages.fetch({ limit: 100 });
-  for (const msg of fetched.values()) {
-    if (msg.author.id === client.user?.id) {
-      await msg.delete().catch(() => {});
-    }
-  }
-  console.log('[Startup] Cleared old bot messages');
-
-  /* -------------------------------------------------- */
-  /* ROLE + SERVICES                                   */
-  /* -------------------------------------------------- */
-
-  let roleReactionService: RoleReactionService | undefined;
-  if (process.env.ROLE_CHANNEL_ID) {
-    const roleChannel = (await client.channels.fetch(
-      process.env.ROLE_CHANNEL_ID!
-    )) as TextChannel;
-
-    roleReactionService = new RoleReactionService(
-      roleChannel.guild,
-      roleChannel
-    );
-    await roleReactionService.postReactionRoleMessage();
-    console.log('[Startup] Reaction role message ready');
-  }
-
-  const roleService = new EventRoleService(
-    announceChannel.guild,
-    roleReactionService
-  );
-  await roleService.ensureRolesExist();
-  console.log('[Startup] Event roles ensured');
-
-  const messageService = new MessageService(announceChannel);
 
   const commandService = new CommandService(client);
   await commandService.register();
   console.log('[Startup] Slash commands registered');
 
-  /* -------------------------------------------------- */
-  /* INITIAL GLOBAL NOTIFY SEND                         */
-  /* -------------------------------------------------- */
-
-  await runGlobalNotify(
-    messageService,
-    roleService,
-    announceChannel,
-    true
-  );
-
-  /* -------------------------------------------------- */
-  /* POLL LOOP                                         */
-  /* -------------------------------------------------- */
-
-  const interval = Number(process.env.FETCH_INTERVAL ?? 60) * 1000;
-
-  setInterval(async () => {
-    await runGlobalNotify(
-      messageService,
-      roleService,
-      announceChannel,
-      false
-    );
-  }, interval);
+  await startOrReload();
 });
 
-/* ================================================== */
-/* GLOBAL NOTIFY LOGIC                                */
-/* ================================================== */
+configService.on('reload', async () => {
+  console.log('[Config] Reload triggered');
+  await startOrReload();
+});
+
+/* ================= START / RELOAD ================= */
+
+async function startOrReload() {
+  const config = configService.get();
+  if (!config.configured) {
+    console.log('[Init] Waiting for /setup');
+    return;
+  }
+
+  const guild = await client.guilds.fetch(config.guildId!);
+  const announceChannel = (await client.channels.fetch(
+    config.notifyChannelId!
+  )) as TextChannel;
+
+  if (!initialized) {
+    const fetched = await announceChannel.messages.fetch({ limit: 100 });
+    for (const msg of fetched.values()) {
+      if (msg.author.id === client.user?.id) {
+        await msg.delete().catch(() => {});
+      }
+    }
+    console.log('[Startup] Cleared old bot messages');
+  }
+
+  await initializeServices(guild, announceChannel, config);
+  initialized = true;
+}
+
+async function initializeServices(
+  guild: any,
+  announceChannel: TextChannel,
+  config: any
+) {
+  let roleReactionService: RoleReactionService | undefined;
+
+  if (config.roleChannelId) {
+    const roleChannel = (await client.channels.fetch(
+      config.roleChannelId
+    )) as TextChannel;
+
+    roleReactionService = new RoleReactionService(guild, roleChannel);
+
+    // 🔴 ALWAYS attempt reuse first
+    await roleReactionService.postReactionRoleMessage(
+      config.roleMessageId ?? undefined
+    );
+
+    console.log('[Startup] Reaction role message ready');
+  }
+
+  const roleService = new EventRoleService(guild, roleReactionService);
+  await roleService.ensureRolesExist();
+  console.log('[Startup] Event roles ensured');
+
+  const messageService = new MessageService(announceChannel);
+
+  if (pollHandle) clearInterval(pollHandle);
+
+  await runGlobalNotify(messageService, roleService, announceChannel, true);
+  console.log('[Startup] Initial global notify sent');
+
+  pollHandle = setInterval(async () => {
+    await runGlobalNotify(messageService, roleService, announceChannel, false);
+  }, 60_000);
+}
+
+/* ================= GLOBAL NOTIFY ================= */
 
 async function runGlobalNotify(
   messageService: MessageService,
@@ -118,7 +124,7 @@ async function runGlobalNotify(
 ) {
   try {
     const events = (await metaforge.fetchEvents()).map(
-      (e) => new EventMessage(e)
+      e => new EventMessage(e)
     );
 
     const now = Date.now();
@@ -132,45 +138,32 @@ async function runGlobalNotify(
     }
 
     for (const [map, list] of eventsPerMap) {
-      list.sort(
-        (a, b) =>
-          a.startTime.getTime() - b.startTime.getTime()
-      );
+      list.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
 
       const current =
-        list.find(
-          (e) =>
-            e.startTime.getTime() <= now &&
-            e.endTime.getTime() > now
-        ) ?? null;
+        list.find(e => e.startTime.getTime() <= now && e.endTime.getTime() > now) ?? null;
 
       const next =
-        list.find((e) => e.startTime.getTime() > now) ??
-        list[0];
+        list.find(e => e.startTime.getTime() > now) ?? list[0];
 
-      const roleId = await roleService.resolve(
-        next.name,
-        next.icon
-      );
-
-      // ✅ FIX: use announceChannel.guild (public)
+      const roleId = await roleService.resolve(next.name, next.icon);
       const role = await announceChannel.guild.roles.fetch(roleId);
       if (!role) continue;
 
-      const newState = await messageService.sendOrReplace(
+      const state = await messageService.sendOrReplace(
         liveMessages.get(map),
         current,
         next,
         role
       );
 
-      liveMessages.set(map, newState);
+      liveMessages.set(map, state);
 
-      console.log(
-        `[${isStartup ? 'Startup' : 'Poll'}] ${map} → Current: ${
-          current?.name ?? 'None'
-        }, Next: ${next.name}`
-      );
+      if (!isStartup) {
+        console.log(
+          `[Poll] ${map} → Current: ${current?.name ?? 'None'}, Next: ${next.name}`
+        );
+      }
 
       const diff = next.startTime.getTime() - now;
       if (
@@ -180,9 +173,7 @@ async function runGlobalNotify(
       ) {
         announced.add(next.key);
         await messageService.sendPing(next, role);
-        console.log(
-          `[Ping] 5-minute warning for ${next.name} on ${map}`
-        );
+        console.log(`[Ping] 5-minute warning for ${next.name} on ${map}`);
       }
     }
   } catch (err) {
