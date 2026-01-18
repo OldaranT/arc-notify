@@ -11,6 +11,8 @@ interface EventRole {
 }
 
 export class RoleReactionService {
+  private static listenersRegistered = false;
+
   private guild: Guild;
   private channel: TextChannel;
   private roles: Map<string, EventRole>;
@@ -39,7 +41,10 @@ export class RoleReactionService {
 
     console.log('[RoleReactionService] Loaded roles:', [...this.roles.keys()]);
 
-    this.registerReactionListeners();
+    if (!RoleReactionService.listenersRegistered) {
+      this.registerReactionListeners();
+      RoleReactionService.listenersRegistered = true;
+    }
   }
 
   private registerReactionListeners() {
@@ -94,7 +99,6 @@ export class RoleReactionService {
       })),
     };
 
-    // Try reuse saved message
     if (existingMessageId) {
       try {
         this.message = await this.channel.messages.fetch(existingMessageId);
@@ -103,7 +107,6 @@ export class RoleReactionService {
       }
     }
 
-    // Create or update
     if (!this.message) {
       this.message = await this.channel.send({ embeds: [embed] });
       console.log('[RoleReactionService] Created role message', this.message.id);
@@ -112,10 +115,9 @@ export class RoleReactionService {
       console.log('[RoleReactionService] Reused role message', this.message.id);
     }
 
-    // 🔴 Persist message ID
-    configService.update({ roleMessageId: this.message.id });
+    // 🔥 FIX: silent update (NO reload loop)
+    configService.updateSilent({ roleMessageId: this.message.id });
 
-    // Ensure reactions exist
     const current = this.message.reactions.cache.map(r => r.emoji.name);
     for (const role of this.roles.values()) {
       if (!current.includes(role.emoji)) {
@@ -126,6 +128,7 @@ export class RoleReactionService {
 
   public async addRole(name: string, roleId: string, emoji: string, icon?: string) {
     this.roles.set(name, { name, roleId, emoji, icon });
+
     fs.writeFileSync(
       this.filePath,
       JSON.stringify(Object.fromEntries(this.roles), null, 2),

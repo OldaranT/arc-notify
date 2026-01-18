@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import EventEmitter from 'events';
 
 export interface BotConfig {
   configured?: boolean;
@@ -8,52 +7,81 @@ export interface BotConfig {
   notifyChannelId?: string;
   roleChannelId?: string;
   roleMessageId?: string | null;
+
+  resendOnStartup?: boolean;
+  reminderMinutes?: number;
+  pingRoles?: boolean;
 }
 
-const CONFIG_PATH = path.resolve(process.cwd(), 'src/config/bot-config.json');
+const CONFIG_PATH = path.resolve(process.cwd(), 'bot-config.json');
 
-class ConfigService extends EventEmitter {
+const DEFAULTS = {
+  resendOnStartup: true,
+  reminderMinutes: 5,
+  pingRoles: true,
+};
+
+class ConfigService {
   private config: BotConfig = {};
+  private listeners: (() => void)[] = [];
 
   constructor() {
-    super();
     this.load();
-
-    // Reload if file edited manually
-    fs.watchFile(CONFIG_PATH, () => {
-      const before = JSON.stringify(this.config);
-      this.load();
-      const after = JSON.stringify(this.config);
-      if (before !== after) {
-        this.emit('reload');
-      }
-    });
   }
 
   private load() {
-    if (!fs.existsSync(CONFIG_PATH)) {
-      this.config = {};
-      return;
+    if (fs.existsSync(CONFIG_PATH)) {
+      this.config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
     }
+  }
 
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf-8').trim();
-    this.config = raw ? JSON.parse(raw) : {};
+  /** 🔁 Normal save → triggers reload */
+  save(config: BotConfig) {
+    this.config = {
+      ...DEFAULTS,
+      ...this.config,
+      ...config,
+    };
+
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2));
+    this.emitReload();
+  }
+
+  /**
+   * 🔇 Silent update
+   * Used for internal bookkeeping (ex: roleMessageId)
+   * Does NOT reload the bot
+   */
+  updateSilent(config: BotConfig) {
+    this.config = {
+      ...DEFAULTS,
+      ...this.config,
+      ...config,
+    };
+
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2));
+  }
+
+  // Backward compatibility
+  update(config: BotConfig) {
+    this.save(config);
   }
 
   get(): BotConfig {
-    return this.config;
+    return {
+      ...DEFAULTS,
+      ...this.config,
+    };
   }
 
-  save(config: BotConfig) {
-    this.config = config;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-    this.emit('reload');
+  on(event: 'reload', listener: () => void) {
+    if (event === 'reload') {
+      this.listeners.push(listener);
+    }
   }
 
-  // 🔹 NEW: partial update without reload
-  update(partial: Partial<BotConfig>) {
-    this.config = { ...this.config, ...partial };
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2));
+  private emitReload() {
+    for (const fn of this.listeners) fn();
   }
 }
 

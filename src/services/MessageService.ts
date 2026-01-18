@@ -10,21 +10,13 @@ export interface MapMessageState {
 export class MessageService {
   constructor(private channel: TextChannel) {}
 
-  /**
-   * Creates or replaces a global notify message.
-   * Recreates ONLY if:
-   * - current/next event changed
-   * - OR force === true (ex: 5-minute warning)
-   *
-   * Uses Discord relative timestamps so messages do not need polling updates.
-   */
   async sendOrReplace(
     state: MapMessageState | undefined,
     current: EventMessage | null,
     next: EventMessage,
     roles: Role[],
     force = false,
-    extraNote?: string
+    notice?: string
   ): Promise<MapMessageState> {
     const currentKey = current?.key ?? null;
 
@@ -37,6 +29,7 @@ export class MessageService {
       return state;
     }
 
+    // Delete previous message
     if (state?.messageId) {
       try {
         const old = await this.channel.messages.fetch(state.messageId);
@@ -58,9 +51,9 @@ export class MessageService {
             `⏱ **Ends:** <t:${Math.floor(
               current.endTime.getTime() / 1000
             )}:R>\n` +
-            `🕰 **Ends at:** <t:${Math.floor(
-              current.endTime.getTime() / 1000
-            )}:F>`
+              `🕰 **Ends at:** <t:${Math.floor(
+                current.endTime.getTime() / 1000
+              )}:F>`
           )
           .setThumbnail(current.icon ?? null)
           .setFooter({ text: current.map })
@@ -80,26 +73,32 @@ export class MessageService {
           `🕒 **Starts:** <t:${Math.floor(
             next.startTime.getTime() / 1000
           )}:R>\n` +
-          `🕰 **Starts at:** <t:${Math.floor(
-            next.startTime.getTime() / 1000
-          )}:F>\n` +
-          `🕰 **Ends at:** <t:${Math.floor(
-            next.endTime.getTime() / 1000
-          )}:F>\n` +
-          `⏱ **Duration:** ${durationMin}m`
+            `🕰 **Starts at:** <t:${Math.floor(
+              next.startTime.getTime() / 1000
+            )}:F>\n` +
+            `🕰 **Ends at:** <t:${Math.floor(
+              next.endTime.getTime() / 1000
+            )}:F>\n` +
+            `⏱ **Duration:** ${durationMin}m`
         )
         .setThumbnail(next.icon ?? null)
         .setFooter({ text: next.map })
     );
 
+    /* ---------------- ROLE MENTIONS ---------------- */
+
     const uniqueRoles = Array.from(
-      new Set(roles.map((r) => r.id))
-    ).map((id) => roles.find((r) => r.id === id)!);
+      new Set(roles.map(r => r.id))
+    ).map(id => roles.find(r => r.id === id)!);
+
+    const content =
+      (uniqueRoles.length
+        ? uniqueRoles.map(r => `**${r}**`).join(' ')
+        : '') +
+      (notice ? `\n\n**${notice}**` : '');
 
     const msg: Message = await this.channel.send({
-      content:
-        uniqueRoles.map((r) => `${r}`).join(' ') +
-        (extraNote ? `\n⚠️ **${extraNote}**` : ''),
+      content: content || undefined,
       embeds,
     });
 
@@ -108,20 +107,5 @@ export class MessageService {
       currentKey,
       nextKey: next.key,
     };
-  }
-
-  /**
-   * Role ping (spam is intentional)
-   */
-  async sendPing(
-    event: EventMessage,
-    role: Role,
-    verb: 'started' | 'starts'
-  ): Promise<void> {
-    const ts = Math.floor(event.startTime.getTime() / 1000);
-
-    await this.channel.send(
-      `${role} **${event.name}** on **${event.map}** ${verb} <t:${ts}:R>`
-    );
   }
 }
