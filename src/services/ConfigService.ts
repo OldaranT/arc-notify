@@ -7,7 +7,6 @@ export interface BotConfig {
   notifyChannelId?: string;
   roleChannelId?: string;
   roleMessageId?: string | null;
-
   resendOnStartup?: boolean;
   reminderMinutes?: number;
   pingRoles?: boolean;
@@ -35,7 +34,7 @@ class ConfigService {
     }
   }
 
-  /** 🔁 Normal save → triggers reload */
+  /** Normal save → merge + reload */
   save(config: BotConfig) {
     this.config = {
       ...DEFAULTS,
@@ -47,11 +46,14 @@ class ConfigService {
     this.emitReload();
   }
 
-  /**
-   * 🔇 Silent update
-   * Used for internal bookkeeping (ex: roleMessageId)
-   * Does NOT reload the bot
-   */
+  /** 🔥 HARD RESET (used by /reset-setup) */
+  reset() {
+    this.config = {};
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify({}, null, 2));
+    this.emitReload();
+  }
+
+  /** Silent update (no reload) */
   updateSilent(config: BotConfig) {
     this.config = {
       ...DEFAULTS,
@@ -60,11 +62,6 @@ class ConfigService {
     };
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(this.config, null, 2));
-  }
-
-  // Backward compatibility
-  update(config: BotConfig) {
-    this.save(config);
   }
 
   get(): BotConfig {

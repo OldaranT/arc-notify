@@ -4,6 +4,9 @@ import {
   GatewayIntentBits,
   Partials,
   TextChannel,
+  REST,
+  Routes,
+  SlashCommandBuilder,
 } from 'discord.js';
 
 import { MetaforgeService } from './services/MetaforgeService';
@@ -13,6 +16,8 @@ import { EventRoleService } from './services/EventRoleService';
 import { CommandService } from './services/CommandService';
 import { RoleReactionService } from './services/RoleReactionService';
 import { configService } from './services/ConfigService';
+
+/* ================= CLIENT ================= */
 
 const client = new Client({
   intents: [
@@ -24,6 +29,28 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction],
 });
 
+/* ================= SLASH COMMAND DEFINITIONS ================= */
+
+const slashCommands = [
+  new SlashCommandBuilder()
+    .setName('next-event')
+    .setDescription('View upcoming events'),
+
+  new SlashCommandBuilder()
+    .setName('setup')
+    .setDescription('Run initial bot setup'),
+
+  new SlashCommandBuilder()
+    .setName('current-setup')
+    .setDescription('View the current bot configuration'),
+
+  new SlashCommandBuilder()
+    .setName('reset-setup')
+    .setDescription('Reset bot configuration'),
+].map(c => c.toJSON());
+
+/* ================= STATE ================= */
+
 const metaforge = new MetaforgeService();
 const warned = new Set<string>();
 const started = new Set<string>();
@@ -32,16 +59,69 @@ const liveMessages = new Map<string, MapMessageState>();
 let pollHandle: NodeJS.Timeout | null = null;
 let initialized = false;
 
+/* ================= COMMAND SYNC ================= */
+
+async function syncCommandsForGuild(guildId: string, guildName?: string) {
+  const rest = new REST({ version: '10' }).setToken(
+    process.env.DISCORD_TOKEN!
+  );
+
+  await rest.put(
+    Routes.applicationGuildCommands(
+      client.application!.id,
+      guildId
+    ),
+    { body: slashCommands }
+  );
+
+  console.log(`✅ Synced commands for ${guildName ?? guildId}`);
+}
+
 /* ================= READY ================= */
 
 client.once('clientReady', async () => {
   console.log(`[Startup] Logged in as ${client.user?.tag}`);
+
+  // 🔁 Sync commands for ALL current guilds
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await syncCommandsForGuild(guild.id, guild.name);
+    } catch (err) {
+      console.error(`❌ Failed to sync ${guild.name}`, err);
+    }
+  }
+
+  // 🔁 Sync commands when bot joins a new guild
+  client.on('guildCreate', async guild => {
+    try {
+      await syncCommandsForGuild(guild.id, guild.name);
+    } catch (err) {
+      console.error(`❌ Failed to sync ${guild.name}`, err);
+    }
+  });
+
   const commandService = new CommandService(client);
   await commandService.register();
+
   await startOrReload();
 });
 
-configService.on('reload', startOrReload);
+/* ================= CONFIG RELOAD ================= */
+
+configService.on('reload', async () => {
+  // 🧹 stop all running services cleanly
+  if (pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
+
+  warned.clear();
+  started.clear();
+  liveMessages.clear();
+  initialized = false;
+
+  await startOrReload();
+});
 
 /* ================= START / RELOAD ================= */
 
@@ -90,8 +170,6 @@ async function initializeServices(
 
   const messageService = new MessageService(channel);
 
-  if (pollHandle) clearInterval(pollHandle);
-
   if (config.resendOnStartup) {
     await runGlobalNotify(messageService, roleService, channel);
   }
@@ -139,29 +217,23 @@ async function runGlobalNotify(
     const next =
       list.find(e => e.startTime.getTime() > now) ?? list[0];
 
-    /* -------- Resolve roles -------- */
-
     const rolesToPing = [];
 
     if (config.pingRoles) {
       if (current) {
-        const currentRoleId = await roleService.resolve(
-          current.name,
-          current.icon
-        );
-        const currentRole = await channel.guild.roles.fetch(currentRoleId);
-        if (currentRole) rolesToPing.push(currentRole);
+        const id = await roleService.resolve(current.name, current.icon);
+        const role = await channel.guild.roles.fetch(id);
+        if (role) rolesToPing.push(role);
       }
 
-      const nextRoleId = await roleService.resolve(next.name, next.icon);
-      const nextRole = await channel.guild.roles.fetch(nextRoleId);
-      if (nextRole) rolesToPing.push(nextRole);
+      const id = await roleService.resolve(next.name, next.icon);
+      const role = await channel.guild.roles.fetch(id);
+      if (role) rolesToPing.push(role);
     }
 
     let force = false;
     let notice: string | undefined;
 
-    /* -------- Reminder -------- */
     if (
       reminderMs &&
       !warned.has(next.key) &&
@@ -169,18 +241,13 @@ async function runGlobalNotify(
     ) {
       warned.add(next.key);
       force = true;
-      notice = `Starts <t:${Math.floor(
-        next.startTime.getTime() / 1000
-      )}:R>`;
+      notice = `Starts <t:${Math.floor(next.startTime.getTime() / 1000)}:R>`;
     }
 
-    /* -------- Event started -------- */
     if (current && !started.has(current.key)) {
       started.add(current.key);
       force = true;
-      notice = `Started <t:${Math.floor(
-        current.startTime.getTime() / 1000
-      )}:R>`;
+      notice = `Started <t:${Math.floor(current.startTime.getTime() / 1000)}:R>`;
     }
 
     const state = await messageService.sendOrReplace(
@@ -195,6 +262,8 @@ async function runGlobalNotify(
     liveMessages.set(map, state);
   }
 }
+
+/* ================= LOGIN ================= */
 
 (async () => {
   await client.login(process.env.DISCORD_TOKEN);

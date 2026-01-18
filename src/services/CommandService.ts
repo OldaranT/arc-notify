@@ -53,6 +53,7 @@ export class CommandService {
   async register(): Promise<void> {
     this.client.on('interactionCreate', async (interaction: Interaction) => {
       try {
+        /* ================= CHAT COMMANDS ================= */
         if (interaction.isChatInputCommand()) {
           switch (interaction.commandName) {
             case 'next-event':
@@ -69,14 +70,25 @@ export class CommandService {
 
             case 'reset-setup':
             case 'setup-reset':
-              configService.save({});
+              configService.reset();
               this.pendingSetup.clear();
               await interaction.reply({
-                content: '🔄 Setup reset. You may now run /setup again.',
+                content: '🔄 Setup fully reset. Run /setup again.',
                 flags: MessageFlags.Ephemeral,
               });
               return;
           }
+        }
+
+        /* ================= SELECT MENUS ================= */
+        if (interaction.isStringSelectMenu()) {
+          if (interaction.customId === NEXT_EVENT_SELECT_ID) {
+            await this.handleNextEventSelect(interaction);
+            return;
+          }
+
+          await this.handleSetupSelect(interaction);
+          return;
         }
 
         if (interaction.isChannelSelectMenu()) {
@@ -84,11 +96,7 @@ export class CommandService {
           return;
         }
 
-        if (interaction.isStringSelectMenu()) {
-          await this.handleSetupSelect(interaction);
-          return;
-        }
-
+        /* ================= MODALS ================= */
         if (interaction.isModalSubmit()) {
           if (interaction.customId === SETUP_ROLEMSG_MODAL) {
             await this.handleRoleMessageModal(interaction);
@@ -99,6 +107,149 @@ export class CommandService {
         console.error('❌ CommandService error:', err);
       }
     });
+  }
+
+  /* ================= NEXT EVENT ================= */
+
+  private buildEventSelect(events: EventMessage[]) {
+    const names = Array.from(new Set(events.map(e => e.name))).sort();
+
+    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(NEXT_EVENT_SELECT_ID)
+        .setPlaceholder('Select an event')
+        .addOptions(
+          { label: 'All events', value: 'all' },
+          ...names.map(name => ({ label: name, value: name }))
+        )
+    );
+  }
+
+  private async handleNextEvent(interaction: ChatInputCommandInteraction) {
+    const future = await this.getFutureEvents();
+
+    if (!future.length) {
+      await interaction.reply({
+        content: '⏳ No upcoming events.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const embed = this.buildAllNearestEventsEmbed(future);
+
+    await interaction.reply({
+      embeds: [embed],
+      components: [this.buildEventSelect(future)],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async handleNextEventSelect(
+    interaction: StringSelectMenuInteraction
+  ) {
+    const future = await this.getFutureEvents();
+    const selected = interaction.values[0];
+
+    let embed: EmbedBuilder;
+
+    if (selected === 'all') {
+      embed = this.buildAllNearestEventsEmbed(future);
+    } else {
+      const events = future.filter(e => e.name === selected);
+
+      if (!events.length) {
+        embed = new EmbedBuilder()
+          .setTitle(selected)
+          .setDescription('⏳ Waiting for updates');
+      } else {
+        embed = this.buildSpecificEventEmbed(events);
+      }
+    }
+
+    await interaction.update({
+      embeds: [embed],
+      components: interaction.message.components,
+    });
+  }
+
+  private async getFutureEvents(): Promise<EventMessage[]> {
+    const now = Date.now();
+    const events = (await this.metaforge.fetchEvents()).map(
+      e => new EventMessage(e)
+    );
+
+    return events
+      .filter(e => e.startTime.getTime() > now)
+      .sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+  }
+
+  /**
+   * ALL:
+   * - nearest upcoming event per event name
+   * - if same timestamp, show all
+   */
+  private buildAllNearestEventsEmbed(events: EventMessage[]) {
+    const grouped = new Map<string, EventMessage[]>();
+
+    for (const e of events) {
+      const list = grouped.get(e.name) ?? [];
+      list.push(e);
+      grouped.set(e.name, list);
+    }
+
+    const selected: EventMessage[] = [];
+
+    for (const list of grouped.values()) {
+      list.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+      const first = list[0];
+      const sameTime = list.filter(
+        e => e.startTime.getTime() === first.startTime.getTime()
+      );
+      selected.push(...sameTime);
+    }
+
+    selected.sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
+
+    const embed = new EmbedBuilder().setTitle('📅 Upcoming Events');
+
+    embed.setDescription(
+      selected
+        .map(
+          e =>
+            `• ${e.icon ?? ''} **${e.name}** — <t:${Math.floor(
+              e.startTime.getTime() / 1000
+            )}:R>`
+        )
+        .join('\n')
+    );
+
+    return embed;
+  }
+
+  /**
+   * SPECIFIC EVENT:
+   * - show icon
+   * - show up to 2 upcoming events
+   */
+  private buildSpecificEventEmbed(events: EventMessage[]) {
+    const upcoming = events.slice(0, 2);
+    const icon = upcoming[0]?.icon ?? '';
+
+    const embed = new EmbedBuilder()
+      .setTitle(`${icon} ${upcoming[0].name}`)
+      .setDescription(
+        upcoming
+          .map(
+            e =>
+              `• <t:${Math.floor(
+                e.startTime.getTime() / 1000
+              )}:R>`
+          )
+          .join('\n')
+      );
+
+    return embed;
   }
 
   /* ================= CURRENT SETUP ================= */
@@ -120,39 +271,19 @@ export class CommandService {
 
     const config = configService.get();
 
+    const roleMessageLink =
+      config.guildId && config.roleChannelId && config.roleMessageId
+        ? `https://discord.com/channels/${config.guildId}/${config.roleChannelId}/${config.roleMessageId}`
+        : '—';
+
     const embed = new EmbedBuilder()
       .setTitle('⚙️ Current Bot Setup')
-      .setColor(0x5865f2)
       .addFields(
-        {
-          name: 'Configured',
-          value: config.configured ? '✅ Yes' : '❌ No',
-          inline: true,
-        },
-        {
-          name: 'Notify Channel',
-          value: config.notifyChannelId
-            ? `<#${config.notifyChannelId}>`
-            : '—',
-          inline: true,
-        },
-        {
-          name: 'Role Channel',
-          value: config.roleChannelId
-            ? `<#${config.roleChannelId}>`
-            : '—',
-          inline: true,
-        },
-        {
-          name: 'Role Message ID',
-          value: config.roleMessageId ?? '—',
-          inline: true,
-        },
-        {
-          name: 'Resend On Startup',
-          value: config.resendOnStartup ? 'Enabled' : 'Disabled',
-          inline: true,
-        },
+        { name: 'Configured', value: config.configured ? '✅ Yes' : '❌ No', inline: true },
+        { name: 'Notify Channel', value: config.notifyChannelId ? `<#${config.notifyChannelId}>` : '—', inline: true },
+        { name: 'Role Channel', value: config.roleChannelId ? `<#${config.roleChannelId}>` : '—', inline: true },
+        { name: 'Role Message', value: roleMessageLink },
+        { name: 'Resend On Startup', value: config.resendOnStartup ? 'Enabled' : 'Disabled', inline: true },
         {
           name: 'Reminder',
           value:
@@ -161,11 +292,7 @@ export class CommandService {
               : 'Disabled',
           inline: true,
         },
-        {
-          name: 'Ping Roles',
-          value: config.pingRoles ? 'Enabled' : 'Disabled',
-          inline: true,
-        }
+        { name: 'Ping Roles', value: config.pingRoles ? 'Enabled' : 'Disabled', inline: true }
       );
 
     await interaction.reply({
@@ -174,44 +301,7 @@ export class CommandService {
     });
   }
 
-  /* ================= NEXT EVENT ================= */
-
-  private async buildSelect(events: EventMessage[]) {
-    const names = Array.from(new Set(events.map(e => e.name))).sort();
-    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(NEXT_EVENT_SELECT_ID)
-        .setPlaceholder('Select an event')
-        .addOptions(
-          { label: 'All', value: 'all' },
-          ...names.map(name => ({ label: name, value: name }))
-        )
-    );
-  }
-
-  private async handleNextEvent(interaction: ChatInputCommandInteraction) {
-    const now = Date.now();
-    const events = (await this.metaforge.fetchEvents()).map(
-      e => new EventMessage(e)
-    );
-    const future = events.filter(e => e.startTime.getTime() > now);
-
-    if (!future.length) {
-      await interaction.reply({
-        content: '⏳ No upcoming events.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    await interaction.reply({
-      content: 'Select an event:',
-      components: [await this.buildSelect(future)],
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  /* ================= SETUP ================= */
+  /* ================= SETUP (UNCHANGED LOGIC) ================= */
 
   private async handleSetup(interaction: ChatInputCommandInteraction) {
     if (

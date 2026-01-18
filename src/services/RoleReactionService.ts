@@ -24,10 +24,12 @@ export class RoleReactionService {
     this.channel = channel;
     this.filePath = path.resolve('src/config/roles.json');
 
-    const json: Record<string, { roleId: string; emoji: string; icon?: string }> =
-      fs.existsSync(this.filePath)
-        ? JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
-        : {};
+    const json: Record<
+      string,
+      { roleId: string; emoji: string; icon?: string }
+    > = fs.existsSync(this.filePath)
+      ? JSON.parse(fs.readFileSync(this.filePath, 'utf-8'))
+      : {};
 
     this.roles = new Map();
     Object.entries(json).forEach(([name, data]) => {
@@ -48,7 +50,10 @@ export class RoleReactionService {
   }
 
   private registerReactionListeners() {
-    const handleReaction = async (reaction: any, user: User | PartialUser) => {
+    const handleReaction = async (
+      reaction: any,
+      user: User | PartialUser
+    ) => {
       try {
         if (!this.message) return;
         if (reaction.partial) reaction = await reaction.fetch();
@@ -109,13 +114,19 @@ export class RoleReactionService {
 
     if (!this.message) {
       this.message = await this.channel.send({ embeds: [embed] });
-      console.log('[RoleReactionService] Created role message', this.message.id);
+      console.log(
+        '[RoleReactionService] Created role message',
+        this.message.id
+      );
     } else {
       await this.message.edit({ embeds: [embed] });
-      console.log('[RoleReactionService] Reused role message', this.message.id);
+      console.log(
+        '[RoleReactionService] Reused role message',
+        this.message.id
+      );
     }
 
-    // 🔥 FIX: silent update (NO reload loop)
+    // 🔇 silent update (no reload loop)
     configService.updateSilent({ roleMessageId: this.message.id });
 
     const current = this.message.reactions.cache.map(r => r.emoji.name);
@@ -126,7 +137,12 @@ export class RoleReactionService {
     }
   }
 
-  public async addRole(name: string, roleId: string, emoji: string, icon?: string) {
+  public async addRole(
+    name: string,
+    roleId: string,
+    emoji: string,
+    icon?: string
+  ) {
     this.roles.set(name, { name, roleId, emoji, icon });
 
     fs.writeFileSync(

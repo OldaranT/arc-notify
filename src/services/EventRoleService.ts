@@ -40,7 +40,9 @@ export class EventRoleService {
 
     if (!role) {
       role = await this.guild.roles.create({ name: eventName, mentionable: true });
-      const emoji = existing?.emoji || defaultEmojis[Object.keys(this.roles).length % defaultEmojis.length];
+      const emoji =
+        existing?.emoji ||
+        defaultEmojis[Object.keys(this.roles).length % defaultEmojis.length];
       this.roles[eventName] = { roleId: role.id, emoji, icon };
       fs.writeFileSync(this.rolesFile, JSON.stringify(this.roles, null, 2), 'utf-8');
 
