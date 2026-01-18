@@ -51,7 +51,6 @@ export class CommandService {
             interaction.commandName === 'setup-reset' ||
             interaction.commandName === 'reset-setup'
           ) {
-            // 🔴 FULL RESET
             configService.save({});
             this.pendingSetup.clear();
 
@@ -85,7 +84,137 @@ export class CommandService {
     });
   }
 
-  /* ===================== SETUP ===================== */
+  /* ================= NEXT EVENT ================= */
+
+  private async buildSelect(events: EventMessage[]) {
+    const names = Array.from(new Set(events.map(e => e.name))).sort();
+    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(NEXT_EVENT_SELECT_ID)
+        .setPlaceholder('Select an event')
+        .addOptions(
+          { label: 'All', value: 'all' },
+          ...names.map(name => ({ label: name, value: name }))
+        )
+    );
+  }
+
+  private async handleNextEvent(interaction: ChatInputCommandInteraction) {
+    const now = Date.now();
+    const events = (await this.metaforge.fetchEvents()).map(e => new EventMessage(e));
+    const future = events.filter(e => e.startTime.getTime() > now);
+
+    if (!future.length) {
+      await interaction.reply({
+        content: '⏳ No upcoming events.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.reply({
+      content: 'Select an event:',
+      components: [await this.buildSelect(future)],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  private async handleNextEventSelect(interaction: StringSelectMenuInteraction) {
+    const now = Date.now();
+    const events = (await this.metaforge.fetchEvents()).map(e => new EventMessage(e));
+    const future = events.filter(e => e.startTime.getTime() > now);
+
+    if (!future.length) {
+      await interaction.update({
+        content: '⏳ No upcoming events.',
+        components: [],
+      });
+      return;
+    }
+
+    const grouped = new Map<string, EventMessage[]>();
+    for (const e of future) {
+      grouped.set(e.name, [...(grouped.get(e.name) ?? []), e]);
+    }
+
+    const row = await this.buildSelect(future);
+
+    /* ---------- ALL EVENTS ---------- */
+    if (interaction.values[0] === 'all') {
+      const lines: string[] = [];
+
+      for (const [name, list] of grouped) {
+        const nextTime = Math.min(...list.map(e => e.startTime.getTime()));
+        const runs = list.filter(e => e.startTime.getTime() === nextTime);
+
+        const minsUntil = Math.floor((nextTime - now) / 60000);
+        const hours = Math.floor(minsUntil / 60);
+        const minutes = minsUntil % 60;
+
+        const durationMinutes = Math.round(
+          (runs[0].endTime.getTime() - runs[0].startTime.getTime()) / 60000
+        );
+
+        const maps = runs.map(e => e.map).join(', ');
+
+        lines.push(
+          `• **${name}** — Next in: ${hours}h ${minutes}m · Duration: ${durationMinutes}m · Maps: ${maps}`
+        );
+      }
+
+      const embed = new EmbedBuilder()
+        .setTitle('All Upcoming Events')
+        .setDescription(lines.join('\n'));
+
+      await interaction.update({
+        embeds: [embed],
+        components: [row],
+      });
+      return;
+    }
+
+    /* ---------- SINGLE EVENT ---------- */
+
+    const name = interaction.values[0];
+    const list = grouped.get(name);
+
+    if (!list) {
+      await interaction.update({
+        content: '⏳ Event no longer available.',
+        components: [row],
+      });
+      return;
+    }
+
+    const nextTime = Math.min(...list.map(e => e.startTime.getTime()));
+    const runs = list.filter(e => e.startTime.getTime() === nextTime);
+
+    const minsUntil = Math.floor((nextTime - now) / 60000);
+    const hours = Math.floor(minsUntil / 60);
+    const minutes = minsUntil % 60;
+
+    const durationMinutes = Math.round(
+      (runs[0].endTime.getTime() - runs[0].startTime.getTime()) / 60000
+    );
+
+    const maps = runs.map(e => e.map).join(', ');
+
+    const embed = new EmbedBuilder()
+      .setTitle(name)
+      .setDescription(
+        `🕒 Next in: **${hours}h ${minutes}m**\n` +
+        `⏱ Duration: **${durationMinutes}m**\n` +
+        `🗺 Maps: **${maps}**`
+      )
+      .setThumbnail(runs[0].icon ?? null);
+
+    await interaction.update({
+      embeds: [embed],
+      components: [row],
+    });
+  }
+
+  /* ================= SETUP (UNCHANGED) ================= */
 
   private async handleSetup(interaction: ChatInputCommandInteraction) {
     if (!interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator)) {
@@ -96,7 +225,6 @@ export class CommandService {
       return;
     }
 
-    // 🔴 BLOCK IF ALREADY CONFIGURED
     if (configService.get().configured) {
       await interaction.reply({
         content: '⚠️ Bot is already set up. Run /setup-reset to reconfigure.',
@@ -181,70 +309,6 @@ export class CommandService {
       content: '✅ Setup complete. Bot initialized.',
       embeds: [],
       components: [],
-    });
-  }
-
-  /* ================= NEXT EVENT (UNCHANGED) ================= */
-
-  private async buildSelect(events: EventMessage[]) {
-    const names = Array.from(new Set(events.map(e => e.name))).sort();
-    return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder()
-        .setCustomId(NEXT_EVENT_SELECT_ID)
-        .setPlaceholder('Select an event')
-        .addOptions(
-          { label: 'All', value: 'all' },
-          ...names.map(name => ({ label: name, value: name }))
-        )
-    );
-  }
-
-  private async handleNextEvent(interaction: ChatInputCommandInteraction) {
-    const now = Date.now();
-    const events = (await this.metaforge.fetchEvents()).map(e => new EventMessage(e));
-    const future = events.filter(e => e.startTime.getTime() > now);
-
-    if (!future.length) {
-      await interaction.reply({
-        content: '⏳ No upcoming events.',
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    await interaction.reply({
-      content: 'Select an event:',
-      components: [await this.buildSelect(future)],
-      flags: MessageFlags.Ephemeral,
-    });
-  }
-
-  private async handleNextEventSelect(interaction: StringSelectMenuInteraction) {
-    const now = Date.now();
-    const events = (await this.metaforge.fetchEvents()).map(e => new EventMessage(e));
-    const future = events.filter(e => e.startTime.getTime() > now);
-    const grouped = new Map<string, EventMessage[]>();
-
-    for (const e of future) {
-      grouped.set(e.name, [...(grouped.get(e.name) ?? []), e]);
-    }
-
-    const row = await this.buildSelect(future);
-    const list = grouped.get(interaction.values[0]);
-    if (!list) return;
-
-    const next = Math.min(...list.map(e => e.startTime.getTime()));
-    const run = list.find(e => e.startTime.getTime() === next)!;
-    const mins = Math.floor((next - now) / 60000);
-
-    await interaction.update({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle(run.name)
-          .setDescription(`🕒 ${Math.floor(mins / 60)}h ${mins % 60}m\n🗺 ${run.map}`)
-          .setThumbnail(run.icon),
-      ],
-      components: [row],
     });
   }
 }

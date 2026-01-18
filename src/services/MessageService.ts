@@ -1,5 +1,5 @@
 import { TextChannel, Role, EmbedBuilder, Message } from 'discord.js';
-import { EventMessage } from '../domains/EventMessage';
+import { EventMessage } from '../domains/EventMessage.js';
 
 export interface MapMessageState {
   messageId: string;
@@ -11,31 +11,38 @@ export class MessageService {
   constructor(private channel: TextChannel) {}
 
   /**
-   * Creates or replaces a global notify message ONLY if the event changed.
+   * Creates or replaces a global notify message.
+   * Recreates ONLY if:
+   * - current/next event changed
+   * - OR force === true (ex: 5-minute warning)
+   *
    * Uses Discord relative timestamps so messages do not need polling updates.
    */
   async sendOrReplace(
     state: MapMessageState | undefined,
     current: EventMessage | null,
     next: EventMessage,
-    role: Role
+    roles: Role[],
+    force = false,
+    extraNote?: string
   ): Promise<MapMessageState> {
-    // If nothing changed, do nothing
+    const currentKey = current?.key ?? null;
+
     if (
+      !force &&
       state &&
-      state.currentKey === (current?.key ?? null) &&
+      state.currentKey === currentKey &&
       state.nextKey === next.key
     ) {
       return state;
     }
 
-    // Delete old message if it exists
     if (state?.messageId) {
       try {
         const old = await this.channel.messages.fetch(state.messageId);
         await old.delete();
       } catch {
-        // ignore (already deleted, permissions, etc.)
+        // ignore
       }
     }
 
@@ -85,14 +92,20 @@ export class MessageService {
         .setFooter({ text: next.map })
     );
 
+    const uniqueRoles = Array.from(
+      new Set(roles.map((r) => r.id))
+    ).map((id) => roles.find((r) => r.id === id)!);
+
     const msg: Message = await this.channel.send({
-      content: `${role}`,
+      content:
+        uniqueRoles.map((r) => `${r}`).join(' ') +
+        (extraNote ? `\n⚠️ **${extraNote}**` : ''),
       embeds,
     });
 
     return {
       messageId: msg.id,
-      currentKey: current?.key ?? null,
+      currentKey,
       nextKey: next.key,
     };
   }
@@ -100,9 +113,15 @@ export class MessageService {
   /**
    * Role ping (spam is intentional)
    */
-  async sendPing(event: EventMessage, role: Role): Promise<void> {
+  async sendPing(
+    event: EventMessage,
+    role: Role,
+    verb: 'started' | 'starts'
+  ): Promise<void> {
+    const ts = Math.floor(event.startTime.getTime() / 1000);
+
     await this.channel.send(
-      `${role} **${event.name}** is starting soon on **${event.map}**!`
+      `${role} **${event.name}** on **${event.map}** ${verb} <t:${ts}:R>`
     );
   }
 }
